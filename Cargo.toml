@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 rusqlite = { version = "0.28.0", features = ["bundled"] }
+settings = { path = "..\\settings" }
+iced = "0.9"
