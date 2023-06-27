@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use std::process;
 use std::error::Error;
 // use settings::Settings;
+use iced::{widget::{button, column, text, Column, scrollable, container}, Application, Command, Theme, Element, Settings, Length, futures::future::ok};
 
 // const
 const DATABASE_FILE_PATH: &str = "tasks.sqlite3";
@@ -15,46 +16,32 @@ const ALL: &str = "all";
 const TODO: &str = "todo";
 const DONE: &str = "done";
 const DROP: &str = "drop";
-const DELETE: &str = "delete";
+// const DELETE: &str = "delete";
 
 // Error messages
 // const UNFOUND_DATABASE: &str = "Tasks database not found at location: ";
 const AT_LEAST_ONE_PARAMETER: &str = "Need at least 1 parameter, please use the 'help' action.";
 const PARAMETER_NOT_A_NUMBER: &str = "is not a number.";
 const FAILED_PARSE_STR_TO_U32: &str = "The second parameter has to be a number.";
-const ACTION_NEEDS_TWO_PARAMETERS: &str = "This action needs two parameters.";
+// const ACTION_NEEDS_TWO_PARAMETERS: &str = "This action needs two parameters.";
 const UNKNOWN_ACTION: &str = "Unknown action, please refer to the 'help' action.";
 const UNABLE_TO_ADD_TASK: &str = "Unable to add task.";
 const INVALID_TASK_NUMBER: &str = "Invalid task number";
 const UNKNOWN_STATE: &str = "Etat inconnu.";
 
 // SQL queries
-const SQL_QUERY_SELECT_ALL_TODO: &str = "SELECT id, task FROM tasks WHERE state=1;";
+const SQL_QUERY_SELECT_ALL_TASKS: &str = "SELECT id, task, state FROM tasks;";
+const SQL_QUERY_SELECT_TODO_TASKS: &str = "SELECT id, task FROM tasks WHERE state=1;";
+const SQL_QUERY_SELECT_DONE_TASKS: &str = "SELECT id, task FROM tasks WHERE state=2;";
+const SQL_QUERY_SELECT_DROP_TASKS: &str = "SELECT id, task FROM tasks WHERE state=3;";
 const SQL_QUERY_ADD: &str = "INSERT INTO tasks(task) VALUES(?1);";
 const SQL_QUERY_DONE: &str = "UPDATE tasks SET state=2 WHERE id=?1;";
 const SQL_QUERY_DROP: &str = "UPDATE tasks SET state=3 WHERE id=?1;";
-const SQL_QUERY_DELETE: &str = "DELETE FROM tasks WHERE id=?1;";
+// const SQL_QUERY_DELETE: &str = "DELETE FROM tasks WHERE id=?1;";
 
 /*
  * Structs.
  */
-
-struct Options<'a> {
-    action: &'a str,
-    arg2: Option<&'a str>
-}
-
-struct Task {
-    id: i32,
-    task: String,
-}
-
-impl Task {
-    fn print(&self) -> String {
-        format!("{} {}", self.id, self.task)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum State {
     All,
@@ -63,26 +50,85 @@ enum State {
     Dropped,
 }
 
-#[derive(Debug)]
-enum Action {
+struct Task {
+    id: i32,
+    task: String,
+    state: State
+}
+
+impl Task {
+    fn print(&self) -> String {
+        format!("{} {}", self.id, self.task)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Action<'a> {
     Help,
     Gui,
     List(State),
-    Show(State),
-    Add(String),
+    Add(&'a str),
     Done(u32),
     Drop(u32),
     // Delete(u32),
 }
 
+struct Todo<'a> {
+    name: &'a str,
+    conn: Connection,
+    tasks: Vec<Task>,
+}
+
+impl<'a> Application for Todo<'a> {
+    type Message = Action<'a>;
+    type Theme = Theme;
+    type Executor = iced::executor::Default;
+    type Flags = (Connection, Vec<Task>);
+    
+    fn new(flags: Self::Flags) -> (Self, Command<Action<'a>>) {
+        ( Todo{ name: "Todo", conn: flags.0, tasks: flags.1 }, Command::none() )
+    }
+    
+    fn title(&self) -> String {
+        String::from(self.name)
+    }
+    
+    fn view(&self) -> Element<Action<'a>> {
+        
+        
+        let content = column![
+            button("Ajouter").on_press(Action::Add("Nouvelle tâche.")),
+            button("Fini").on_press(Action::Done(42)),
+            button("Abandonné").on_press(Action::Drop(42)),
+        ];
+        scrollable(
+            container(content)
+                .width(Length::Fill)
+                .padding(40)
+                .center_x(),
+        ).into()
+    }
+    
+    fn update(&mut self, action: Action) -> Command<Action<'a>> {
+        
+        match action {
+            Action::Add(task) => println!("Ajouter {}.", task),
+            Action::Done(id) => println!("Fini tache {}.", id),
+            Action::Drop(id) => println!("Tache {} abandonné...", id),
+            _ => println!("ça marche ? ça marche !"),
+        }
+        
+        Command::none()
+    }
+}
+
 /*
  * Main functions.
  */
-
 fn main() {
     let args: Vec<String> = env::args().collect();
     
-    let conn = open_database(DATABASE_FILE_PATH)
+    let conn: Connection = open_database(DATABASE_FILE_PATH)
         .unwrap_or_else(|err| {
             println!("{}", err);
             process::exit(0);
@@ -92,22 +138,11 @@ fn main() {
         .unwrap_or_else(|err| {
             println!("{}", err);
             process::exit(0);
-        });
-    
-    // let options = parse_options(&args)
-    //     .unwrap_or_else(|err| {
-    //         println!("{}", err);
-    //         process::exit(0);
-    // });
-    
-    // if let Err(e) = execute_action(conn, options) {
-    //     println!("{}", e);
-    // }
+    });
     
     if let Err(e) = do_action(conn, action) {
         println!("{}", e);
     }
-    
 }
 
 // Open the database and return the connection.
@@ -116,6 +151,7 @@ fn open_database(file_path: &str) -> Result<Connection, Box<dyn Error>> {
     Ok(conn)
 }
 
+// Parse the user input action.
 fn parse_actions(args: &[String]) -> Result<Action, String> {
     
     if args.len() < 2 {
@@ -123,10 +159,10 @@ fn parse_actions(args: &[String]) -> Result<Action, String> {
     }
     
     let arg1 = args[1].as_str();
-    let mut arg2: Option<String> = Option::None;
+    let mut arg2: Option<&str> = Option::None;
     
     if args.len() >= 3 {
-        arg2 = Option::Some(args[2]);
+        arg2 = Option::Some(args[2].as_str());
     }
     
     // arg2 can be a State, String, u32.
@@ -158,7 +194,7 @@ fn parse_actions(args: &[String]) -> Result<Action, String> {
                 None => return Err(AT_LEAST_ONE_PARAMETER.to_string()),
             };
             
-            match parse_str_to_u32(str_u32.as_str()) {
+            match parse_str_to_u32(str_u32) {
                 Ok(id) => Action::Done(id),
                 Err(e) => return Err(e),
             }
@@ -169,7 +205,7 @@ fn parse_actions(args: &[String]) -> Result<Action, String> {
                 None => return Err(AT_LEAST_ONE_PARAMETER.to_string()),
             };
             
-            match parse_str_to_u32(str_u32.as_str()) {
+            match parse_str_to_u32(str_u32) {
                 Ok(id) => Action::Drop(id),
                 Err(e) => return Err(e),
             }
@@ -181,8 +217,8 @@ fn parse_actions(args: &[String]) -> Result<Action, String> {
     Ok(action)
 }
 
-fn get_state(s: String) -> Result<State, String> {
-    match s.as_str() {
+fn get_state(s: &str) -> Result<State, String> {
+    match s {
         ALL => Ok(State::All),
         TODO => Ok(State::Todo),
         DONE => Ok(State::Done),
@@ -194,69 +230,12 @@ fn get_state(s: String) -> Result<State, String> {
 fn do_action(conn: Connection, action: Action) -> Result<(), String> {
     match action {
         Action::Help => help(),
-        Action::Gui => gui(),
+        Action::Gui => gui(conn),
         Action::List(state) => list(&conn, state),
-        Action::Show(state) => list(&conn, state),
         Action::Add(task) => add(&conn, task),
         Action::Done(task_id) => done(&conn, task_id),
         Action::Drop(task_id) => drop(&conn, task_id),
         // Action::Delete(task_id) => delete(&conn, task_id),
-    }
-}
-
-// Parse the parameters 
-fn parse_options(args: &[String]) -> Result<Options, String> {
-    if args.len() < 2 {
-        return Err(AT_LEAST_ONE_PARAMETER.to_string());
-    }
-    
-    let action = &args[1];
-    let mut arg2 = Option::None;
-    
-    if args.len() >= 3 {
-        arg2 = Option::Some(args[2].as_str());
-    }
-    
-    Ok(Options { action, arg2 })
-}
-
-// Executes the user specified action
-fn execute_action(conn: Connection, options: Options) -> Result<(), String> {
-    let action = options.action;
-    
-    match action {
-        HELP => help(),
-        GUI => gui(),
-        LIST | SHOW => list(&conn, State::Todo),
-        _ => {
-            if let Some(task) = options.arg2 {
-                if action == ADD {
-                    add(&conn, String::from(task))
-                }                
-                else if let Ok(task_id) = parse_str_to_u32(task) {
-                    match action {
-                        DONE => {
-                            done(&conn, task_id)
-                        },
-                        DROP => {
-                            drop(&conn, task_id)
-                        },
-                        DELETE => {
-                            delete(&conn, task_id)
-                        }
-                        _ => {
-                            Err(UNKNOWN_ACTION.to_string())
-                        }
-                    }
-                }
-                else {
-                    Err(FAILED_PARSE_STR_TO_U32.to_string())
-                }
-            }
-            else {
-                Err(ACTION_NEEDS_TWO_PARAMETERS.to_string())
-            }
-        }
     }
 }
 
@@ -271,108 +250,23 @@ fn parse_str_to_u32(str: &str) -> Result<u32, String> {
 /*
  * User actions.
  */
-
-// Show the graphical user interface.
-
-struct Counter {
-    value: i32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Message {
-    IncrementPressed,
-    DecrementPressed,
-}
-
-use iced::{widget::{button, column, text, Column, scrollable, container}, Application, Command, executor, Theme, Element, Settings, Length};
-
-impl Application for Counter {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Theme = Theme;
-    type Flags = ();
-    
-    fn new(_flags: ()) -> (Self, Command<Message>) {
-        (
-            Counter {
-                value: 0,
-            },
-            Command::none()
-        )
-    }
-    
-    fn title(&self) -> String {
-        String::from("Todo")
-    }
-    
-    fn view(&self) -> Element<Message> {
-        let content = column![
-            button("+").on_press(Message::IncrementPressed),
-            text(self.value).size(50),
-            button("-").on_press(Message::DecrementPressed),
-        ];
-        scrollable(
-            container(content)
-                .width(Length::Fill)
-                .padding(40)
-                .center_x(),
-        ).into()
-    }
-    
-    fn update(&mut self, message: Message) -> Command<Message> {
-        match message {
-            Message::IncrementPressed => {self.value += 1}
-            Message::DecrementPressed => {self.value -= 1}
-        }
-        
-        Command::none()
-    }
-    
-    fn theme(&self) -> Self::Theme {
-        Theme::Light
-    }
-}
-
-struct TodoGui;
-
-impl Application for TodoGui {
-    type Message = Action;
-    type Theme = Theme;
-    type Executor = iced::executor::Default;
-    type Flags = ();
-    
-    fn new(flags: Self::Flags) -> (Self, Command<Action>) {
-        ( TodoGui, Command::none() )
-    }
-    
-    fn title(&self) -> String {
-        String::from("Todo")
-    }
-    
-    fn view(&self) -> Element<Action> {
-        let content = column![
-            button("Ajouter").on_press(Action::Add(String::from("Nouvelle tâche."))),
-            button("Fini").on_press(Action::Done(42)),
-            button("Abandonné").on_press(Action::Drop(42)),
-        ];
-        scrollable(
-            container(content)
-                .width(Length::Fill)
-                .padding(40)
-                .center_x(),
-        ).into()
-    }
-    
-    fn update(&mut self, action: Action) -> Command<Action> {
-        
-        Command::none()
-    }
-}
-
-fn gui() -> Result<(), String> {
+fn gui(conn: Connection) -> Result<(), String> {
     println!("Running GUI version...");
     
-    let iced_run_result = Counter::run(Settings::default());
+    let tasks = get_tasks(&conn);
+    
+    let iced_run_result =
+        Todo::run( Settings {
+            id: Option::None,
+            window: iced::window::Settings::default(),
+            flags: (conn, tasks),
+            default_font: Option::None,
+            default_text_size: 20.0,
+            text_multithreading: false,
+            antialiasing: false,
+            exit_on_close_request: true,
+            try_opengles_first: false
+        });
     match iced_run_result {
         Ok(_) => { println!("All good."); }
         Err(_) => { println!("An error occured."); }
@@ -395,16 +289,46 @@ fn help() -> Result<(), String> {
     Ok(())
 }
 
+fn get_tasks(conn: &Connection) -> Vec<Task> {
+    let mut stmt = conn.prepare(SQL_QUERY_SELECT_ALL_TASKS).unwrap();
+    
+    let mapped_rows = stmt.query_map((), |row| {
+        let id = row.get(0)?;
+        let task = row.get(1)?;
+        let state = match row.get(3)? {
+            1 => State::Todo,
+            2 => State::Done,
+            3 => State::Dropped,
+            _ => State::Todo,
+        };
+        
+        Ok(Task { id, task, state })
+    }).unwrap();
+    
+    let mut tasks = Vec::new();
+    
+    for task in mapped_rows {
+        tasks.push(task.unwrap());
+    }
+    
+    tasks
+}
+
 // List all the tasks.
 fn list(conn: &Connection, state: State) -> Result<(), String> {
-    let mut stmt = conn.prepare(SQL_QUERY_SELECT_ALL_TODO).unwrap();
+    let mut stmt = match state {
+        State::All => conn.prepare(SQL_QUERY_SELECT_ALL_TASKS).unwrap(),
+        State::Todo => conn.prepare(SQL_QUERY_SELECT_TODO_TASKS).unwrap(),
+        State::Done => conn.prepare(SQL_QUERY_SELECT_DONE_TASKS).unwrap(),
+        State::Dropped => conn.prepare(SQL_QUERY_SELECT_DROP_TASKS).unwrap(),
+    };
     
     // Retreive the tasks
     let tasks = stmt.query_map((), |row| {
         let id = row.get(0)?;
-        let task: String = row.get(1)?;
+        let task = row.get(1)?;
         
-        Ok(Task { id, task })
+        Ok(Task { id, task, state: State::Todo })
     }).unwrap();
     
     // Print tasks.
@@ -416,7 +340,7 @@ fn list(conn: &Connection, state: State) -> Result<(), String> {
 }
 
 // Add a new task.
-fn add(conn: &Connection, task: String) -> Result<(), String> {
+fn add(conn: &Connection, task: &str) -> Result<(), String> {
     let result =
         conn.execute(SQL_QUERY_ADD, [task]);
     match result {
@@ -446,11 +370,11 @@ fn drop(conn: &Connection, task_id: u32) -> Result<(), String> {
 }
 
 // Delete a task.
-fn delete(conn: &Connection, task_id: u32) -> Result<(), String> {
-    let result =
-        conn.execute(SQL_QUERY_DELETE, [task_id]);
-    match result {
-        Ok(_) => Ok(()),
-        Err(_) => Err(INVALID_TASK_NUMBER.to_string())
-    }
-}
+// fn delete(conn: &Connection, task_id: u32) -> Result<(), String> {
+//     let result =
+//         conn.execute(SQL_QUERY_DELETE, [task_id]);
+//     match result {
+//         Ok(_) => Ok(()),
+//         Err(_) => Err(INVALID_TASK_NUMBER.to_string())
+//     }
+// }
